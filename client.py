@@ -1,78 +1,115 @@
-import threading
-from socket import *
-from customtkinter import *
+from pygame import *
+import soc
 
-
-class MainWindow(CTk):
-    def __init__(self):
-        super().__init__()
-        self.geometry('500x500')
-        self.configure(fg_color='khaki')
-        self.title("крутий чат")
-
-        self.chat_field = CTkTextbox(self, font=('sans-serif', 20), state='disabled', text_color="black", fg_color='white')
-        self.chat_field.pack(padx=10, pady=10, fill='both', expand=True)
-
-        frame = CTkFrame(self)
-        frame.pack(padx=10, pady=5, fill='x')
-
-        self.message_entry = CTkEntry(frame, placeholder_text='Введіть повідомлення -->:')
-        self.message_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
-
-        self.send_button = CTkButton(frame, text='Надіслати', command=self.send_message, fg_color="orange",hover_color="yellow", text_color='black')
-        self.send_button.pack(side='right')
-
-        self.username = 'Artem'
-        self.sock = socket(AF_INET, SOCK_STREAM)
+# ---ПУГАМЕ НАЛАШТУВАННЯ ---
+WIDTH, HEIGHT = 800, 600
+init()
+screen = display.set_mode((WIDTH, HEIGHT))
+clock = time.Clock()
+display.set_caption("Пінг-Понг")
+# ---СЕРВЕР ---
+def connect_to_server():
+    while True:
         try:
-            self.sock.connect(('localhost', 8080))
-            hello = f"TEXT@{self.username}@[SYSTEM] {self.username} приєднався до чату!\n"
-            self.sock.send(hello.encode('utf-8'))
-            threading.Thread(target=self.recv_message, daemon=True).start()
-        except Exception as e:
-            self.add_message(f"[Система] Не вдалося підключитися: {e}")
-
-    def add_message(self, text):
-        self.chat_field.configure(state='normal')
-        self.chat_field.insert(END, text + '\n')
-        self.chat_field.configure(state='disabled')
-        self.chat_field.see(END)
-
-    def send_message(self):
-        message = self.message_entry.get().strip()
-        if message:
-            self.add_message(f"Я: {message}")
-            data = f"TEXT@{self.username}@{message}\n"
-            try:
-                self.sock.sendall(data.encode())
-            except:
-                self.add_message("[Система] Не вдалося надіслати повідомлення.")
-            self.message_entry.delete(0, END)
-
-    def recv_message(self):
-        buffer = ""
-        while True:
-            try:
-                chunk = self.sock.recv(4096)
-                if not chunk:
-                    break
-                buffer += chunk.decode()
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    self.handle_line(line.strip())
-            except:
-                break
-        self.sock.close()
-
-    def handle_line(self, line):
-        parts = line.split("@", 2)
-        if len(parts) >= 3 and parts[0] == "TEXT":
-            author = parts[1]
-            message = parts[2]
-            if author != self.username:
-                self.add_message(f"{author}: {message}")
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.connect(('localhost', 8080)) # ---- Підключення до сервера
+            buffer = ""
+            game_state = {}
+            my_id = int(client.recv(24).decode())
+            return my_id, game_state, buffer, client
+        except:
+            pass
 
 
-if __name__ == "__main__":
-    app = MainWindow()
-    app.mainloop()
+def receive():
+    global buffer, game_state, game_over
+    while not game_over:
+        try:
+            data = client.recv(1024).decode()
+            buffer += data
+            while "\n" in buffer:
+                packet, buffer = buffer.split("\n", 1)
+                if packet.strip():
+                    game_state = json.loads(packet)
+        except:
+            game_state["winner"] = -1
+            break
+
+# --- ШРИФТИ ---
+font_win = font.Font(None, 72)
+font_main = font.Font(None, 36)
+# --- ЗОБРАЖЕННЯ ----
+
+# --- ЗВУКИ ---
+
+# --- ГРА ---
+game_over = False
+winner = None
+you_winner = None
+my_id, game_state, buffer, client = connect_to_server()
+Thread(target=receive, daemon=True).start()
+while True:
+    for e in event.get():
+        if e.type == QUIT:
+            exit()
+
+    if "countdown" in game_state and game_state["countdown"] > 0:
+        screen.fill((0, 0, 0))
+        countdown_text = font.Font(None, 72).render(str(game_state["countdown"]), True, (255, 255, 255))
+        screen.blit(countdown_text, (WIDTH // 2 - 20, HEIGHT // 2 - 30))
+        display.update()
+        continue  # Не малюємо гру до завершення відліку
+
+    if "winner" in game_state and game_state["winner"] is not None:
+        screen.fill((20, 20, 20))
+
+        if you_winner is None:  # Встановлюємо тільки один раз
+            if game_state["winner"] == my_id:
+                you_winner = True
+            else:
+                you_winner = False
+
+        if you_winner:
+            text = "Ти переміг!"
+        else:
+            text = "Пощастить наступним разом!"
+
+        win_text = font_win.render(text, True, (255, 215, 0))
+        text_rect = win_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+        screen.blit(win_text, text_rect)
+
+        text = font_win.render('К - рестарт', True, (255, 215, 0))
+        text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 120))
+        screen.blit(text, text_rect)
+
+        display.update()
+        continue  # Блокує гру після перемоги
+
+    if game_state:
+        screen.fill((30, 30, 30))
+        draw.rect(screen, (0, 255, 0), (20, game_state['paddles']['0'], 20, 100))
+        draw.rect(screen, (255, 0, 255), (WIDTH - 40, game_state['paddles']['1'], 20, 100))
+        draw.circle(screen, (255, 255, 255), (game_state['ball']['x'], game_state['ball']['y']), 10)
+        score_text = font_main.render(f"{game_state['scores'][0]} : {game_state['scores'][1]}", True, (255, 255, 255))
+        screen.blit(score_text, (WIDTH // 2 -25, 20))
+
+        if game_state['sound_event']:
+            if game_state['sound_event'] == 'wall_hit':
+                # звук відбиття м'ячика від стін
+                pass
+            if game_state['sound_event'] == 'platform_hit':
+                # звук відбиття м'ячика від платформи
+                pass
+
+    else:
+        wating_text = font_main.render(f"Очікування гравців...", True, (255, 255, 255))
+        screen.blit(wating_text, (WIDTH // 2 - 25, 20))
+
+    display.update()
+    clock.tick(60)
+
+    keys = key.get_pressed()
+    if keys[K_w]:
+        client.send(b"UP")
+    elif keys[K_s]:
+        client.send(b"DOWN")
